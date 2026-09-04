@@ -1,0 +1,130 @@
+// Ce fichier décrit la structure de notre base de données
+// et la façon dont Prisma doit s'y connecter
+
+// Le "generator" indique à Prisma de générer un client JavaScript
+// que notre code pourra utiliser pour interroger la base
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Le "datasource" indique quelle base de données utiliser,
+// et où trouver l'adresse de connexion (dans le fichier .env)
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+// Représente un utilisateur de l'application WakaTrack
+model User {
+  id        Int      @id @default(autoincrement())
+  // @id = clé primaire (identifiant unique de la ligne)
+  // @default(autoincrement()) = Prisma génère automatiquement 1, 2, 3, ...
+
+  name      String
+  // Le nom affiché de l'utilisateur
+
+  email     String   @unique
+  // @unique = deux utilisateurs ne peuvent jamais avoir le même email
+
+  password  String
+  // Attention : ceci contiendra un mot de passe HACHÉ, jamais en clair
+  // (on s'en occupera à l'étape de l'authentification)
+
+  createdAt DateTime @default(now())
+  // Date de création du compte, remplie automatiquement
+
+    friendshipsSent     Friendship[]     @relation("FriendshipRequester")
+  friendshipsReceived Friendship[]     @relation("FriendshipReceiver")
+  sharingSessions     SharingSession[]
+  positions           Position[]
+  safeZones           SafeZone[]
+  sosAlerts           SosAlert[]
+}
+
+// Représente une relation d'amitié entre deux utilisateurs
+model Friendship {
+  id            Int      @id @default(autoincrement())
+
+  requesterId   Int
+  // L'utilisateur qui a envoyé la demande d'ami
+
+  requester     User     @relation("FriendshipRequester", fields: [requesterId], references: [id])
+  // Ce champ dit à Prisma : "requesterId pointe vers un User existant"
+
+  receiverId    Int
+  // L'utilisateur qui a reçu la demande d'ami
+
+  receiver      User     @relation("FriendshipReceiver", fields: [receiverId], references: [id])
+
+  status        String   @default("pending")
+  // "pending" (en attente), "accepted" (accepté), "refused" (refusé)
+
+  createdAt     DateTime @default(now())
+}
+
+// Représente une session de partage de position active entre deux amis
+model SharingSession {
+  id            Int       @id @default(autoincrement())
+
+  userId        Int
+  // L'utilisateur qui partage sa position
+
+  user          User      @relation(fields: [userId], references: [id])
+
+  friendId      Int
+  // L'ami autorisé à voir cette position
+
+  startDate     DateTime  @default(now())
+  endDate       DateTime
+  // Date/heure à laquelle le partage doit s'arrêter automatiquement
+
+  isActive      Boolean   @default(true)
+}
+
+// Représente une position GPS enregistrée pour un utilisateur
+model Position {
+  id          Int      @id @default(autoincrement())
+
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id])
+
+  latitude    Float
+  longitude   Float
+  accuracy    Float?
+  // Le "?" signifie que ce champ est optionnel (peut être vide)
+
+  recordedAt  DateTime @default(now())
+}
+
+// Représente une zone de sécurité définie par un utilisateur (ex: domicile, école)
+model SafeZone {
+  id        Int      @id @default(autoincrement())
+
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+
+  name      String
+  // Ex: "Domicile", "École"
+
+  latitude  Float
+  longitude Float
+  radius    Float
+  // Rayon de la zone en mètres
+
+  createdAt DateTime @default(now())
+}
+
+// Représente une alerte SOS déclenchée par un utilisateur
+model SosAlert {
+  id          Int      @id @default(autoincrement())
+
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id])
+
+  latitude    Float
+  longitude   Float
+
+  status      String   @default("active")
+  // "active", "resolved" (résolue)
+
+  triggeredAt DateTime @default(now())
+}
