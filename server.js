@@ -2,6 +2,7 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const authMiddleware = require('./authMiddleware');
 
 // server.js
 // Point d'entrée du serveur backend WakaTrack
@@ -131,6 +132,29 @@ app.post('/auth/login', async (req, res) => {
         name: user.name,
         email: user.email
       }
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
+// Route protégée de test : GET /profile
+// Le middleware authMiddleware s'exécute avant cette route
+// Si le jeton est invalide, la requête est bloquée avant même d'arriver ici
+app.get('/profile', authMiddleware, async (req, res) => {
+  try {
+    // Grâce au middleware, on connaît déjà l'id de l'utilisateur connecté
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId }
+    });
+
+    res.json({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      createdAt: user.createdAt
     });
 
   } catch (error) {
