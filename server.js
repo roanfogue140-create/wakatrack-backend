@@ -140,6 +140,159 @@ app.post('/auth/login', async (req, res) => {
   }
 });
 
+// Route pour envoyer une demande d'ami : POST /friends/request
+// L'utilisateur connecté envoie une demande à quelqu'un, identifié par son email
+app.post('/friends/request', authMiddleware, async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: 'L\'email de la personne à ajouter est obligatoire' });
+    }
+
+    // On cherche l'utilisateur cible grâce à son email
+    const targetUser = await prisma.user.findUnique({
+      where: { email }
+    });
+
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Aucun utilisateur trouvé avec cet email' });
+    }
+
+    // On empêche un utilisateur de s'ajouter lui-même en ami
+    if (targetUser.id === req.userId) {
+      return res.status(400).json({ error: 'Tu ne peux pas t\'ajouter toi-même en ami' });
+    }
+
+    // On vérifie qu'une demande n'existe pas déjà entre ces deux personnes,
+    // peu importe qui a envoyé la demande en premier
+    const existingFriendship = await prisma.friendship.findFirst({
+      where: {
+        OR: [
+          { requesterId: req.userId, receiverId: targetUser.id },
+          { requesterId: targetUser.id, receiverId: req.userId }
+        ]
+      }
+    });
+
+    if (existingFriendship) {
+      return res.status(409).json({ error: 'Une relation existe déjà avec cet utilisateur' });
+    }
+
+    // On crée la nouvelle demande d'ami, avec le statut par défaut "pending"
+    const friendship = await prisma.friendship.create({
+      data: {
+        requesterId: req.userId,
+        receiverId: targetUser.id
+      }
+    });
+
+    res.status(201).json({
+      message: 'Demande d\'ami envoyée',
+      friendship
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
+// Route pour répondre à une demande d'ami : POST /friends/respond
+// Permet d'accepter ou de refuser une demande reçue
+app.post('/friends/respond', authMiddleware, async (req, res) => {
+  try {
+    const { friendshipId, accept } = req.body;
+
+    // "accept" doit être un booléen : true pour accepter, false pour refuser
+    if (!friendshipId || typeof accept !== 'boolean') {
+      return res.status(400).json({ error: 'friendshipId et accept (true/false) sont obligatoires' });
+    }
+
+    // On cherche la demande d'ami concernée
+    const friendship = await prisma.friendship.findUnique({
+      where: { id: friendshipId }
+    });
+
+    if (!friendship) {
+      return res.status(404).json({ error: 'Demande d\'ami introuvable' });
+    }
+
+    // Sécurité : seule la personne qui a reçu la demande peut y répondre
+    if (friendship.receiverId !== req.userId) {
+      return res.status(403).json({ error: 'Tu n\'es pas autorisé à répondre à cette demande' });
+    }
+
+    // On vérifie que la demande est bien encore en attente
+    if (friendship.status !== 'pending') {
+      return res.status(409).json({ error: 'Cette demande a déjà été traitée' });
+    }
+
+    // On met à jour le statut selon la réponse de l'utilisateur
+    const updatedFriendship = await prisma.friendship.update({
+      where: { id: friendshipId },
+      data: {
+        status: accept ? 'accepted' : 'refused'
+      }
+    });
+
+    res.json({
+      message: accept ? 'Demande acceptée' : 'Demande refusée',
+      friendship: updatedFriendship
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
+// Route pour lister ses amis : GET /friends
+// Renvoie la liste des relations acceptées, avec les infos de l'ami
+app.get('/friends', authMiddleware, async (req, res) => {
+  try {
+    // On cherche toutes les relations acceptées où l'utilisateur connecté
+    // est soit le demandeur, soit le destinataire
+    const friendships = await prisma.friendship.findMany({
+      where: {
+        status: 'accepted',
+        OR: [
+          { requesterId: req.userId },
+          { receiverId: req.userId }
+        ]
+      },
+      include: {
+        requester: true,
+        receiver: true
+      }
+    });
+
+    // Pour chaque relation, on affiche les infos de "l'autre personne",
+    // pas celles de l'utilisateur connecté lui-même
+    const friendsList = friendships.map(friendship => {
+      const friend = friendship.requesterId === req.userId
+        ? friendship.receiver
+        : friendship.requester;
+
+      return {
+        friendshipId: friendship.id,
+        id: friend.id,
+        name: friend.name,
+        email: friend.email
+      };
+    });
+
+    res.json({
+      count: friendsList.length,
+      friends: friendsList
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
 // Route protégée de test : GET /profile
 // Le middleware authMiddleware s'exécute avant cette route
 // Si le jeton est invalide, la requête est bloquée avant même d'arriver ici
