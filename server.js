@@ -346,6 +346,90 @@ app.post('/sharing/start', authMiddleware, async (req, res) => {
   }
 });
 
+// Route pour enregistrer une nouvelle position GPS : POST /positions
+// Le téléphone de l'utilisateur connecté envoie sa position actuelle
+app.post('/positions', authMiddleware, async (req, res) => {
+  try {
+    const { latitude, longitude, accuracy } = req.body;
+
+    // On vérifie que latitude et longitude sont bien présentes et numériques
+    if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+      return res.status(400).json({ error: 'latitude et longitude doivent être des nombres' });
+    }
+
+    // Vérification basique de cohérence géographique
+    // La latitude va de -90 à 90, la longitude de -180 à 180
+    if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+      return res.status(400).json({ error: 'Coordonnées GPS invalides' });
+    }
+
+    const position = await prisma.position.create({
+      data: {
+        userId: req.userId,
+        latitude,
+        longitude,
+        accuracy: accuracy || null
+      }
+    });
+
+    res.status(201).json({
+      message: 'Position enregistrée',
+      position
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
+// Route pour voir la dernière position d'un ami : GET /positions/:friendId
+// Ne fonctionne que si un partage actif et non expiré existe
+app.get('/positions/:friendId', authMiddleware, async (req, res) => {
+  try {
+    const friendId = parseInt(req.params.friendId);
+
+    if (isNaN(friendId)) {
+      return res.status(400).json({ error: 'Identifiant d\'ami invalide' });
+    }
+
+    // On cherche une session de partage active de cet ami vers l'utilisateur connecté
+    const session = await prisma.sharingSession.findFirst({
+      where: {
+        userId: friendId,
+        friendId: req.userId,
+        isActive: true,
+        endDate: {
+          gt: new Date()
+          // "gt" veut dire "greater than", donc la date de fin doit être
+          // dans le futur par rapport à maintenant
+        }
+      }
+    });
+
+    if (!session) {
+      return res.status(403).json({ error: 'Cet utilisateur ne partage pas sa position avec toi actuellement' });
+    }
+
+    // On cherche la dernière position connue de cet ami
+    const lastPosition = await prisma.position.findFirst({
+      where: { userId: friendId },
+      orderBy: { recordedAt: 'desc' }
+      // "desc" veut dire décroissant, donc la position la plus récente en premier
+    });
+
+    if (!lastPosition) {
+      return res.status(404).json({ error: 'Aucune position disponible pour cet utilisateur' });
+    }
+
+    res.json({ position: lastPosition });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
 // Route pour arrêter un partage de position : POST /sharing/stop
 // Permet une révocation immédiate, comme prévu par F12
 app.post('/sharing/stop', authMiddleware, async (req, res) => {
