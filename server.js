@@ -492,9 +492,58 @@ app.get('/profile', authMiddleware, async (req, res) => {
   }
 });
 
-// Le port est lu depuis .env ; si non défini, on utilise 3000 par défaut
+// On importe le module HTTP natif de Node.js
+const http = require('http');
+// On crée un serveur HTTP, en lui donnant notre application Express
+const server = http.createServer(app);
+
+// On importe Socket.IO, et on l'attache à ce même serveur HTTP
+const { Server } = require('socket.io');
+const io = new Server(server, {
+  cors: {
+    origin: '*'
+    // On autorise toute origine pour l'instant, en développement
+    // On restreindra cette valeur plus tard, une fois l'app Flutter connue
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
+// Middleware Socket.IO : vérifie le jeton JWT au moment de la connexion
+io.use((socket, next) => {
+  // Le client devra envoyer son jeton dans "socket.handshake.auth.token"
+  const token = socket.handshake.auth.token;
+
+  if (!token) {
+    return next(new Error('Jeton d\'authentification manquant'));
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    // On attache l'id de l'utilisateur directement à l'objet "socket",
+    // pour pouvoir l'utiliser dans tous les événements suivants de cette connexion
+    socket.userId = decoded.userId;
+    next();
+  } catch (error) {
+    next(new Error('Jeton invalide ou expiré'));
+  }
+});
+
+// Cette fonction s'exécute à chaque fois qu'un client se connecte avec succès
+io.on('connection', (socket) => {
+  console.log(`Utilisateur ${socket.userId} connecté en temps réel`);
+
+  // On fait entrer cet utilisateur dans son salon personnel
+  // Le nom du salon est construit à partir de son identifiant
+  socket.join(`user-${socket.userId}`);
+
+  socket.on('disconnect', () => {
+    console.log(`Utilisateur ${socket.userId} déconnecté`);
+  });
+});
+
+// C'est maintenant "server.listen" et non plus "app.listen"
+// puisque c'est le serveur HTTP complet qu'on démarre, Express et Socket.IO ensemble
+server.listen(PORT, () => {
   console.log(`Serveur WakaTrack démarré sur http://localhost:${PORT}`);
 });
