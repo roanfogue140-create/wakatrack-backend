@@ -293,6 +293,98 @@ app.get('/friends', authMiddleware, async (req, res) => {
   }
 });
 
+// Route pour démarrer un partage de position : POST /sharing/start
+// L'utilisateur connecté autorise un ami précis à voir sa position,
+// pendant une durée donnée en minutes
+app.post('/sharing/start', authMiddleware, async (req, res) => {
+  try {
+    const { friendId, durationMinutes } = req.body;
+
+    if (!friendId || !durationMinutes) {
+      return res.status(400).json({ error: 'friendId et durationMinutes sont obligatoires' });
+    }
+
+    // On vérifie qu'une amitié acceptée existe bien entre les deux personnes,
+    // peu importe qui avait envoyé la demande à l'origine
+    const friendship = await prisma.friendship.findFirst({
+      where: {
+        status: 'accepted',
+        OR: [
+          { requesterId: req.userId, receiverId: friendId },
+          { requesterId: friendId, receiverId: req.userId }
+        ]
+      }
+    });
+
+    if (!friendship) {
+      return res.status(403).json({ error: 'Vous devez être amis pour partager votre position' });
+    }
+
+    // On calcule la date de fin du partage
+    // Date.now() donne l'heure actuelle en millisecondes
+    // On ajoute la durée demandée, convertie elle aussi en millisecondes
+    const endDate = new Date(Date.now() + durationMinutes * 60 * 1000);
+
+    // On crée la session de partage
+    const session = await prisma.sharingSession.create({
+      data: {
+        userId: req.userId,
+        friendId: friendId,
+        endDate: endDate,
+        isActive: true
+      }
+    });
+
+    res.status(201).json({
+      message: 'Partage de position activé',
+      session
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
+// Route pour arrêter un partage de position : POST /sharing/stop
+// Permet une révocation immédiate, comme prévu par F12
+app.post('/sharing/stop', authMiddleware, async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+
+    if (!sessionId) {
+      return res.status(400).json({ error: 'sessionId est obligatoire' });
+    }
+
+    const session = await prisma.sharingSession.findUnique({
+      where: { id: sessionId }
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: 'Session de partage introuvable' });
+    }
+
+    // Sécurité : seul le propriétaire de cette session peut l'arrêter
+    if (session.userId !== req.userId) {
+      return res.status(403).json({ error: 'Tu n\'es pas autorisé à arrêter cette session' });
+    }
+
+    const updatedSession = await prisma.sharingSession.update({
+      where: { id: sessionId },
+      data: { isActive: false }
+    });
+
+    res.json({
+      message: 'Partage de position arrêté',
+      session: updatedSession
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
 // Route protégée de test : GET /profile
 // Le middleware authMiddleware s'exécute avant cette route
 // Si le jeton est invalide, la requête est bloquée avant même d'arriver ici
