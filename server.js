@@ -82,6 +82,63 @@ app.post('/auth/register', async (req, res) => {
   }
 });
 
+// Route de connexion : POST /auth/login
+// Vérifie l'email et le mot de passe, puis renvoie un jeton JWT si tout est correct
+app.post('/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    // Vérification simple : on refuse si un champ obligatoire manque
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email et mot de passe sont obligatoires' });
+    }
+
+    // On cherche un utilisateur avec cet email dans la base
+    const user = await prisma.user.findUnique({
+      where: { email }
+    });
+
+    // Si aucun utilisateur trouvé, on refuse la connexion
+    // On donne volontairement un message vague ("email ou mot de passe incorrect")
+    // plutôt que de préciser "email inconnu", pour ne pas donner d'indice
+    // à quelqu'un qui essaierait de deviner des comptes existants
+    if (!user) {
+      return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
+    }
+
+    // On compare le mot de passe tapé avec le mot de passe haché stocké en base
+    // bcrypt.compare fait le hachage du mot de passe tapé, puis compare les deux résultats hachés
+    const passwordMatches = await bcrypt.compare(password, user.password);
+
+    if (!passwordMatches) {
+      return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
+    }
+
+    // Si tout correspond, on crée un jeton JWT
+    // Ce jeton contient l'id de l'utilisateur, signé avec notre clé secrète
+    // Il expire après 7 jours, après quoi l'utilisateur devra se reconnecter
+    const token = jwt.sign(
+      { userId: user.id },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({
+      message: 'Connexion réussie',
+      token,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email
+      }
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
 // Le port est lu depuis .env ; si non défini, on utilise 3000 par défaut
 const PORT = process.env.PORT || 3000;
 
