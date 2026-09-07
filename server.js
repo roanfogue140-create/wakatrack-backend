@@ -1,9 +1,3 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
-const authMiddleware = require('./authMiddleware');
-
 // server.js
 // Point d'entrée du serveur backend WakaTrack
 
@@ -13,6 +7,14 @@ require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
+
+const { PrismaClient } = require('@prisma/client');
+const prisma = new PrismaClient();
+
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+
+const authMiddleware = require('./authMiddleware');
 
 // Crée l'application Express : c'est l'objet central qui va gérer
 // toutes les requêtes HTTP entrantes (GET, POST, etc.)
@@ -132,6 +134,29 @@ app.post('/auth/login', async (req, res) => {
         name: user.name,
         email: user.email
       }
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
+// Route protégée de test : GET /profile
+// Le middleware authMiddleware s'exécute avant cette route
+// Si le jeton est invalide, la requête est bloquée avant même d'arriver ici
+app.get('/profile', authMiddleware, async (req, res) => {
+  try {
+    // Grâce au middleware, on connaît déjà l'id de l'utilisateur connecté
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId }
+    });
+
+    res.json({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      createdAt: user.createdAt
     });
 
   } catch (error) {
@@ -346,7 +371,45 @@ app.post('/sharing/start', authMiddleware, async (req, res) => {
   }
 });
 
-// Route pour enregistrer une nouvelle position GPS : POST /positions
+// Route pour arrêter un partage de position : POST /sharing/stop
+// Permet une révocation immédiate, comme prévu par F12
+app.post('/sharing/stop', authMiddleware, async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+
+    if (!sessionId) {
+      return res.status(400).json({ error: 'sessionId est obligatoire' });
+    }
+
+    const session = await prisma.sharingSession.findUnique({
+      where: { id: sessionId }
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: 'Session de partage introuvable' });
+    }
+
+    // Sécurité : seul le propriétaire de cette session peut l'arrêter
+    if (session.userId !== req.userId) {
+      return res.status(403).json({ error: 'Tu n\'es pas autorisé à arrêter cette session' });
+    }
+
+    const updatedSession = await prisma.sharingSession.update({
+      where: { id: sessionId },
+      data: { isActive: false }
+    });
+
+    res.json({
+      message: 'Partage de position arrêté',
+      session: updatedSession
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
 // Le téléphone de l'utilisateur connecté envoie sa position actuelle
 app.post('/positions', authMiddleware, async (req, res) => {
   try {
@@ -370,6 +433,29 @@ app.post('/positions', authMiddleware, async (req, res) => {
         longitude,
         accuracy: accuracy || null
       }
+    });
+
+    // On cherche tous les amis qui ont actuellement un partage actif
+    // et non expiré vers l'utilisateur qui vient d'envoyer sa position
+    const activeSessions = await prisma.sharingSession.findMany({
+      where: {
+        userId: req.userId,
+        isActive: true,
+        endDate: {
+          gt: new Date()
+        }
+      }
+    });
+
+    // Pour chaque ami autorisé, on envoie la nouvelle position
+    // directement dans son salon personnel
+    activeSessions.forEach((session) => {
+      io.to(`user-${session.friendId}`).emit('positionUpdate', {
+        userId: req.userId,
+        latitude: position.latitude,
+        longitude: position.longitude,
+        recordedAt: position.recordedAt
+      });
     });
 
     res.status(201).json({
@@ -430,68 +516,6 @@ app.get('/positions/:friendId', authMiddleware, async (req, res) => {
   }
 });
 
-// Route pour arrêter un partage de position : POST /sharing/stop
-// Permet une révocation immédiate, comme prévu par F12
-app.post('/sharing/stop', authMiddleware, async (req, res) => {
-  try {
-    const { sessionId } = req.body;
-
-    if (!sessionId) {
-      return res.status(400).json({ error: 'sessionId est obligatoire' });
-    }
-
-    const session = await prisma.sharingSession.findUnique({
-      where: { id: sessionId }
-    });
-
-    if (!session) {
-      return res.status(404).json({ error: 'Session de partage introuvable' });
-    }
-
-    // Sécurité : seul le propriétaire de cette session peut l'arrêter
-    if (session.userId !== req.userId) {
-      return res.status(403).json({ error: 'Tu n\'es pas autorisé à arrêter cette session' });
-    }
-
-    const updatedSession = await prisma.sharingSession.update({
-      where: { id: sessionId },
-      data: { isActive: false }
-    });
-
-    res.json({
-      message: 'Partage de position arrêté',
-      session: updatedSession
-    });
-
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
-  }
-});
-
-// Route protégée de test : GET /profile
-// Le middleware authMiddleware s'exécute avant cette route
-// Si le jeton est invalide, la requête est bloquée avant même d'arriver ici
-app.get('/profile', authMiddleware, async (req, res) => {
-  try {
-    // Grâce au middleware, on connaît déjà l'id de l'utilisateur connecté
-    const user = await prisma.user.findUnique({
-      where: { id: req.userId }
-    });
-
-    res.json({
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      createdAt: user.createdAt
-    });
-
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
-  }
-});
-
 // On importe le module HTTP natif de Node.js
 const http = require('http');
 // On crée un serveur HTTP, en lui donnant notre application Express
@@ -506,8 +530,6 @@ const io = new Server(server, {
     // On restreindra cette valeur plus tard, une fois l'app Flutter connue
   }
 });
-
-const PORT = process.env.PORT || 3000;
 
 // Middleware Socket.IO : vérifie le jeton JWT au moment de la connexion
 io.use((socket, next) => {
@@ -541,6 +563,8 @@ io.on('connection', (socket) => {
     console.log(`Utilisateur ${socket.userId} déconnecté`);
   });
 });
+
+const PORT = process.env.PORT || 3000;
 
 // C'est maintenant "server.listen" et non plus "app.listen"
 // puisque c'est le serveur HTTP complet qu'on démarre, Express et Socket.IO ensemble
