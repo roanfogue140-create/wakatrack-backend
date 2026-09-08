@@ -618,6 +618,107 @@ app.delete('/safezones/:id', authMiddleware, async (req, res) => {
   }
 });
 
+// Route pour déclencher une alerte SOS : POST /sos
+// Envoie immédiatement la position et une notification à tous les amis
+app.post('/sos', authMiddleware, async (req, res) => {
+  try {
+    const { latitude, longitude } = req.body;
+
+    if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+      return res.status(400).json({ error: 'latitude et longitude doivent être des nombres' });
+    }
+
+    // On enregistre l'alerte dans la base, avec le statut "active"
+    const sosAlert = await prisma.sosAlert.create({
+      data: {
+        userId: req.userId,
+        latitude,
+        longitude
+      }
+    });
+
+    // On récupère les informations de l'utilisateur, pour personnaliser la notification
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId }
+    });
+
+    // On cherche tous les amis de cet utilisateur, peu importe qui a partage actif ou non,
+    // puisqu'une alerte SOS doit atteindre tout le cercle de confiance
+    const friendships = await prisma.friendship.findMany({
+      where: {
+        status: 'accepted',
+        OR: [
+          { requesterId: req.userId },
+          { receiverId: req.userId }
+        ]
+      }
+    });
+
+    // Pour chaque ami, on envoie immédiatement une notification dans son salon personnel
+    friendships.forEach((friendship) => {
+      const friendId = friendship.requesterId === req.userId
+        ? friendship.receiverId
+        : friendship.requesterId;
+
+      io.to(`user-${friendId}`).emit('sosAlert', {
+        alertId: sosAlert.id,
+        fromUserId: user.id,
+        fromUserName: user.name,
+        latitude: sosAlert.latitude,
+        longitude: sosAlert.longitude,
+        triggeredAt: sosAlert.triggeredAt
+      });
+    });
+
+    res.status(201).json({
+      message: 'Alerte SOS envoyée à tes amis',
+      sosAlert
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
+// Route pour marquer une alerte SOS comme résolue : POST /sos/resolve
+app.post('/sos/resolve', authMiddleware, async (req, res) => {
+  try {
+    const { alertId } = req.body;
+
+    if (!alertId) {
+      return res.status(400).json({ error: 'alertId est obligatoire' });
+    }
+
+    const alert = await prisma.sosAlert.findUnique({
+      where: { id: alertId }
+    });
+
+    if (!alert) {
+      return res.status(404).json({ error: 'Alerte introuvable' });
+    }
+
+    // Sécurité : seule la personne qui a déclenché l'alerte peut la résoudre
+    if (alert.userId !== req.userId) {
+      return res.status(403).json({ error: 'Tu n\'es pas autorisé à résoudre cette alerte' });
+    }
+
+    const updatedAlert = await prisma.sosAlert.update({
+      where: { id: alertId },
+      data: { status: 'resolved' }
+    });
+
+    res.json({
+      message: 'Alerte marquée comme résolue',
+      sosAlert: updatedAlert
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
 // Route pour voir la dernière position d'un ami : GET /positions/:friendId
 // Ne fonctionne que si un partage actif et non expiré existe
 app.get('/positions/:friendId', authMiddleware, async (req, res) => {
