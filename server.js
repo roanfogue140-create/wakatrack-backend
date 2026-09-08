@@ -3,6 +3,24 @@
 
 // Charge les variables définies dans le fichier .env (ex: PORT, clés secrètes)
 // Doit être appelé tout en haut, avant d'utiliser process.env
+// Calcule la distance en mètres entre deux points GPS
+// grâce à la formule de Haversine, qui tient compte de la courbure de la Terre
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371000; // Rayon moyen de la Terre, en mètres
+  const toRad = (deg) => (deg * Math.PI) / 180;
+
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c; // Distance en mètres
+}
 require('dotenv').config();
 
 const express = require('express');
@@ -458,10 +476,141 @@ app.post('/positions', authMiddleware, async (req, res) => {
       });
     });
 
+// Vérification des zones de sécurité : on regarde si cette nouvelle position
+// fait entrer ou sortir l'utilisateur d'une de ses zones enregistrées
+const userSafeZones = await prisma.safeZone.findMany({
+  where: { userId: req.userId }
+});
+
+// On récupère la position juste avant celle-ci, pour connaître l'état précédent
+const previousPosition = await prisma.position.findFirst({
+  where: {
+    userId: req.userId,
+    id: { not: position.id }
+  },
+  orderBy: { recordedAt: 'desc' }
+});
+
+for (const zone of userSafeZones) {
+  const currentDistance = calculateDistance(
+    latitude, longitude,
+    zone.latitude, zone.longitude
+  );
+  const isInsideNow = currentDistance <= zone.radius;
+
+  let wasInsideBefore = false;
+
+  if (previousPosition) {
+    const previousDistance = calculateDistance(
+      previousPosition.latitude, previousPosition.longitude,
+      zone.latitude, zone.longitude
+    );
+    wasInsideBefore = previousDistance <= zone.radius;
+  }
+
+  // On envoie une notification seulement si l'état a changé
+  if (isInsideNow && !wasInsideBefore) {
+    io.to(`user-${req.userId}`).emit('zoneEvent', {
+      type: 'enter',
+      zoneName: zone.name,
+      zoneId: zone.id
+    });
+  } else if (!isInsideNow && wasInsideBefore) {
+    io.to(`user-${req.userId}`).emit('zoneEvent', {
+      type: 'exit',
+      zoneName: zone.name,
+      zoneId: zone.id
+    });
+  }
+}
+
     res.status(201).json({
       message: 'Position enregistrée',
       position
     });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
+// Route pour créer une zone de sécurité : POST /safezones
+app.post('/safezones', authMiddleware, async (req, res) => {
+  try {
+    const { name, latitude, longitude, radius } = req.body;
+
+    if (!name || typeof latitude !== 'number' || typeof longitude !== 'number' || typeof radius !== 'number') {
+      return res.status(400).json({ error: 'name, latitude, longitude et radius sont obligatoires' });
+    }
+
+    if (radius <= 0) {
+      return res.status(400).json({ error: 'Le rayon doit être un nombre positif' });
+    }
+
+    const safeZone = await prisma.safeZone.create({
+      data: {
+        userId: req.userId,
+        name,
+        latitude,
+        longitude,
+        radius
+      }
+    });
+
+    res.status(201).json({
+      message: 'Zone de sécurité créée',
+      safeZone
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
+// Route pour lister ses zones de sécurité : GET /safezones
+app.get('/safezones', authMiddleware, async (req, res) => {
+  try {
+    const safeZones = await prisma.safeZone.findMany({
+      where: { userId: req.userId }
+    });
+
+    res.json({ safeZones });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
+// Route pour supprimer une zone de sécurité : DELETE /safezones/:id
+app.delete('/safezones/:id', authMiddleware, async (req, res) => {
+  try {
+    const zoneId = parseInt(req.params.id);
+
+    if (isNaN(zoneId)) {
+      return res.status(400).json({ error: 'Identifiant de zone invalide' });
+    }
+
+    const zone = await prisma.safeZone.findUnique({
+      where: { id: zoneId }
+    });
+
+    if (!zone) {
+      return res.status(404).json({ error: 'Zone de sécurité introuvable' });
+    }
+
+    // Sécurité : seul le propriétaire de la zone peut la supprimer
+    if (zone.userId !== req.userId) {
+      return res.status(403).json({ error: 'Tu n\'es pas autorisé à supprimer cette zone' });
+    }
+
+    await prisma.safeZone.delete({
+      where: { id: zoneId }
+    });
+
+    res.json({ message: 'Zone de sécurité supprimée' });
 
   } catch (error) {
     console.error(error);

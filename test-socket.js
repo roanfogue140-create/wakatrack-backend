@@ -1,10 +1,10 @@
 // test-socket.js
-// Ce script joue le rôle d'Awa, connectée en temps réel,
-// en attente de recevoir la position de Roan
+// Ce script écoute les événements en temps réel pour Roan,
+// notamment les entrées et sorties de zones de sécurité
 
 const { io } = require('socket.io-client');
 
-const TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjIsImlhdCI6MTc4ODgxMDczMywiZXhwIjoxNzg5NDE1NTMzfQ.0hJvWd8UlYDrF-16jGZBp3J4JKXwc6zPaGW9DUxNiAs';
+const TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsImlhdCI6MTc4ODgxMDk5NCwiZXhwIjoxNzg5NDE1Nzk0fQ.WgjRganOvmUADneoJOHW5E5jf_H23d1NSpnIT4_-LYs';
 
 const socket = io('http://localhost:3000', {
   auth: {
@@ -13,11 +13,11 @@ const socket = io('http://localhost:3000', {
 });
 
 socket.on('connect', () => {
-  console.log('Awa est connectée et attend une mise à jour de position');
+  console.log('Roan est connecté et attend des événements');
 });
 
-socket.on('positionUpdate', (data) => {
-  console.log('Nouvelle position reçue :', data);
+socket.on('zoneEvent', (data) => {
+  console.log('Événement de zone reçu :', data);
 });
 
 socket.on('connect_error', (error) => {
