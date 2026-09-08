@@ -681,6 +681,79 @@ app.post('/sos', authMiddleware, async (req, res) => {
   }
 });
 
+// Route pour calculer un point de rendez-vous : POST /meetup
+// Calcule un point central entre l'utilisateur et une liste d'amis,
+// à partir de leurs dernières positions connues
+app.post('/meetup', authMiddleware, async (req, res) => {
+  try {
+    const { friendIds } = req.body;
+
+    if (!Array.isArray(friendIds) || friendIds.length === 0) {
+      return res.status(400).json({ error: 'friendIds doit être une liste non vide d\'identifiants' });
+    }
+
+    // On commence par récupérer la propre position de l'utilisateur
+    const positions = [];
+
+    const ownLastPosition = await prisma.position.findFirst({
+      where: { userId: req.userId },
+      orderBy: { recordedAt: 'desc' }
+    });
+
+    if (ownLastPosition) {
+      positions.push(ownLastPosition);
+    }
+
+    // Pour chaque ami demandé, on vérifie qu'un partage actif existe bien
+    // vers l'utilisateur connecté, avant de récupérer sa position
+    for (const friendId of friendIds) {
+      const session = await prisma.sharingSession.findFirst({
+        where: {
+          userId: friendId,
+          friendId: req.userId,
+          isActive: true,
+          endDate: { gt: new Date() }
+        }
+      });
+
+      if (session) {
+        const friendLastPosition = await prisma.position.findFirst({
+          where: { userId: friendId },
+          orderBy: { recordedAt: 'desc' }
+        });
+
+        if (friendLastPosition) {
+          positions.push(friendLastPosition);
+        }
+      }
+    }
+
+    if (positions.length === 0) {
+      return res.status(404).json({ error: 'Aucune position disponible pour calculer un point de rendez-vous' });
+    }
+
+    // Calcul de la moyenne simple des latitudes et longitudes
+    // Fiable à l'échelle d'une ville, ce qui correspond à l'usage prévu
+    const totalLat = positions.reduce((sum, p) => sum + p.latitude, 0);
+    const totalLon = positions.reduce((sum, p) => sum + p.longitude, 0);
+
+    const meetupPoint = {
+      latitude: totalLat / positions.length,
+      longitude: totalLon / positions.length
+    };
+
+    res.json({
+      message: 'Point de rendez-vous calculé',
+      participantsCount: positions.length,
+      meetupPoint
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
 // Route pour marquer une alerte SOS comme résolue : POST /sos/resolve
 app.post('/sos/resolve', authMiddleware, async (req, res) => {
   try {
