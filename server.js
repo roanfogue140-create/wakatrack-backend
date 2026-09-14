@@ -1,8 +1,7 @@
-// server.js
-// Point d'entrée du serveur backend WakaTrack
 
-// Charge les variables définies dans le fichier .env (ex: PORT, clés secrètes)
-// Doit être appelé tout en haut, avant d'utiliser process.env
+/* Charge les variables définies dans le fichier .env (ex: PORT, clés secrètes)
+ Doit être appelé tout en haut, avant d'utiliser process.env
+*/
 require('dotenv').config();
 
 const express = require('express');
@@ -59,9 +58,10 @@ app.get('/', (req, res) => {
 
 // Route d'inscription : POST /auth/register
 // Reçoit un nom, un email et un mot de passe, puis crée un nouvel utilisateur
+
 app.post('/auth/register', async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password, phone } = req.body;
 
     if (!name || !email || !password) {
       return res.status(400).json({ error: 'Nom, email et mot de passe sont obligatoires' });
@@ -73,7 +73,11 @@ app.post('/auth/register', async (req, res) => {
       data: {
         name,
         email,
-        password: hashedPassword
+        password: hashedPassword,
+        // Le téléphone est optionnel : on met "null" s'il n'est pas fourni,
+        // plutôt qu'une chaîne vide, pour ne pas déclencher la contrainte d'unicité
+        // avec d'autres comptes qui auraient aussi laissé ce champ vide
+        phone: phone || null
       }
     });
 
@@ -82,13 +86,16 @@ app.post('/auth/register', async (req, res) => {
       user: {
         id: newUser.id,
         name: newUser.name,
-        email: newUser.email
+        email: newUser.email,
+        phone: newUser.phone
       }
     });
 
   } catch (error) {
     if (error.code === 'P2002') {
-      return res.status(409).json({ error: 'Cet email est déjà utilisé' });
+      // On précise quel champ précis pose problème, email ou téléphone
+      const field = error.meta?.target?.includes('phone') ? 'Ce numéro' : 'Cet email';
+      return res.status(409).json({ error: `${field} est déjà utilisé` });
     }
 
     console.error(error);
@@ -165,22 +172,20 @@ app.get('/profile', authMiddleware, async (req, res) => {
 // Route pour envoyer une demande d'ami : POST /friends/request
 app.post('/friends/request', authMiddleware, async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email, phone } = req.body;
 
-    if (!email) {
-      return res.status(400).json({ error: 'L\'email de la personne à ajouter est obligatoire' });
+    if (!email && !phone) {
+      return res.status(400).json({ error: 'L\'email ou le numéro de la personne à ajouter est obligatoire' });
     }
 
+    // On cherche l'utilisateur cible, soit par email, soit par téléphone,
+    // selon celui qui a été fourni dans la requête
     const targetUser = await prisma.user.findUnique({
-      where: { email }
+      where: email ? { email } : { phone }
     });
 
     if (!targetUser) {
-      return res.status(404).json({ error: 'Aucun utilisateur trouvé avec cet email' });
-    }
-
-    if (targetUser.id === req.userId) {
-      return res.status(400).json({ error: 'Tu ne peux pas t\'ajouter toi-même en ami' });
+      return res.status(404).json({ error: 'Aucun utilisateur trouvé avec ces informations' });
     }
 
     const existingFriendship = await prisma.friendship.findFirst({

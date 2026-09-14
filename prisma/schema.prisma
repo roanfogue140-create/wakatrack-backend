@@ -25,6 +25,9 @@ model User {
   email     String   @unique
   // @unique = deux utilisateurs ne peuvent jamais avoir le même email
 
+  phone     String?  @unique
+  // Le "?" rend ce champ optionnel, contrairement à email qui reste obligatoire
+ 
   password  String
   // Attention : ceci contiendra un mot de passe HACHÉ, jamais en clair
   // (on s'en occupera à l'étape de l'authentification)
