@@ -385,6 +385,43 @@ app.post('/sharing/stop', authMiddleware, async (req, res) => {
   }
 });
 
+// Route pour lister les sessions de partage actives de l'utilisateur connecté
+// GET /sharing/active
+app.get('/sharing/active', authMiddleware, async (req, res) => {
+  try {
+    const sessions = await prisma.sharingSession.findMany({
+      where: {
+        userId: req.userId,
+        isActive: true,
+        endDate: {
+          gt: new Date()
+        }
+      },
+      include: {
+        // On inclut aussi les infos de l'ami concerné par chaque session,
+        // pour ne pas avoir à faire une requête séparée côté Flutter
+      }
+    });
+
+    // Pour chaque session, on récupère aussi le nom de l'ami concerné
+    const sessionsWithFriendInfo = await Promise.all(
+      sessions.map(async (session) => {
+        const friend = await prisma.user.findUnique({
+          where: { id: session.friendId },
+          select: { id: true, name: true, email: true }
+        });
+        return { ...session, friend };
+      })
+    );
+
+    res.json({ sessions: sessionsWithFriendInfo });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
 // Route pour enregistrer une nouvelle position GPS : POST /positions
 // Le téléphone de l'utilisateur connecté envoie sa position actuelle
 app.post('/positions', authMiddleware, async (req, res) => {
