@@ -550,6 +550,53 @@ app.get('/positions/history/export', authMiddleware, async (req, res) => {
   }
 });
 
+// Route pour récupérer les positions de tous les amis qui partagent
+// actuellement leur position avec l'utilisateur connecté
+// GET /positions/shared-with-me
+app.get('/positions/shared-with-me', authMiddleware, async (req, res) => {
+  try {
+    // On cherche toutes les sessions actives où l'utilisateur connecté
+    // est le destinataire autorisé
+    const sessions = await prisma.sharingSession.findMany({
+      where: {
+        friendId: req.userId,
+        isActive: true,
+        endDate: { gt: new Date() }
+      }
+    });
+
+    // Pour chaque session, on récupère la dernière position connue
+    // de la personne qui partage, ainsi que son nom
+    const sharedPositions = await Promise.all(
+      sessions.map(async (session) => {
+        const friend = await prisma.user.findUnique({
+          where: { id: session.userId },
+          select: { id: true, name: true }
+        });
+
+        const lastPosition = await prisma.position.findFirst({
+          where: { userId: session.userId },
+          orderBy: { recordedAt: 'desc' }
+        });
+
+        return {
+          friend,
+          position: lastPosition
+        };
+      })
+    );
+
+    // On ne garde que les amis pour qui une position existe vraiment
+    const validPositions = sharedPositions.filter((item) => item.position !== null);
+
+    res.json({ sharedPositions: validPositions });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
 // Route pour voir la dernière position d'un ami : GET /positions/:friendId
 app.get('/positions/:friendId', authMiddleware, async (req, res) => {
   try {
@@ -590,6 +637,7 @@ app.get('/positions/:friendId', authMiddleware, async (req, res) => {
     res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
   }
 });
+
 
 // Route pour créer une zone de sécurité : POST /safezones
 app.post('/safezones', authMiddleware, async (req, res) => {
