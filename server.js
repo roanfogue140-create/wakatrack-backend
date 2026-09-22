@@ -303,6 +303,36 @@ app.get('/friends', authMiddleware, async (req, res) => {
   }
 });
 
+// Route pour lister les demandes d'ami reçues, encore en attente
+// GET /friends/pending
+app.get('/friends/pending', authMiddleware, async (req, res) => {
+  try {
+    const pendingRequests = await prisma.friendship.findMany({
+      where: {
+        receiverId: req.userId,
+        status: 'pending'
+      },
+      include: {
+        requester: true
+      }
+    });
+
+    const formatted = pendingRequests.map((friendship) => ({
+      friendshipId: friendship.id,
+      id: friendship.requester.id,
+      name: friendship.requester.name,
+      email: friendship.requester.email,
+      createdAt: friendship.createdAt
+    }));
+
+    res.json({ pendingRequests: formatted });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Erreur serveur, réessaie plus tard' });
+  }
+});
+
 // Route pour démarrer un partage de position : POST /sharing/start
 app.post('/sharing/start', authMiddleware, async (req, res) => {
   try {
